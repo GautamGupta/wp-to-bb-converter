@@ -5,7 +5,7 @@
  * Requires WordPress 3.0 (or above) and bbPress 1.1 (or above)
  * 
  * @author Gautam <admin@gaut.am>
- * @version 0.1-aplha2
+ * @version 0.1-beta1
  * @license http://www.gnu.org/licenses/old-licenses/gpl-2.0.txt GPL 2.0
  * 
  * @todo Category -> Forum (Preserving hierarchy) (#1)
@@ -43,7 +43,8 @@ define( 'W2BC_BB_PATH', 'forum/' ); /** With Trailing Slash, if required */
  * month day hour or month hour second). Make this to false if not needed. The
  * post date you set is also included (ie. >= (greater than or equal to)
  * comparison is used). This should not be GMT time, but the timezone of your
- * blog (set in WP settings).
+ * blog (set in WP settings). Currently, there maybe some problems if you
+ * supply minutes and seconds, so better don't.
  */
 define( 'W2BC_CONVERT_FROM_TIME', false );
 /** Convert pingacks too? true or false */
@@ -54,12 +55,14 @@ define( 'W2BC_CONVERT_PINGBACKS', true );
  *****************************************************************************/
 
 /* For Developers */
-define( 'W2BC_VER', '0.1-alpha2' ); /** Version */
-define( 'W2BC_DEBUG', false ); /** Debug? */
-define( 'W2BC_DISABLE_SCRIPT', false ); /** Disable script? Lets you disable any functionality from this script without the need of delete this. */
-define( 'SAVEQUERIES', true ); /** Save DB Queries */
-define( 'BB_LOAD_DEPRECATED', false ); /** Don't load deprecated stuff */
-define( 'W2BC_MEMORY_LIMIT', '128M' ); /** Memory limit - a blog with around 800 posts requires 128M */
+define( 'W2BC_VER', '0.1-beta1' );		/** Version */
+define( 'W2BC_DEBUG', false );			/** Debug? */
+define( 'W2BC_DISABLE_SCRIPT', false );		/** Disable script? Lets you disable any functionality from this script without the need of delete this. */
+define( 'SAVEQUERIES', true );			/** Save DB Queries */
+define( 'W2BC_MEMORY_LIMIT', '256M' );		/** Memory limit - a blog with around 800 posts requires 128M on localhost */
+define( 'W2BC_ALLOW_SYNC', false );		/** Show Sync options? Use the W2BC_CONVERT_FROM_TIME contsant above to set time */
+if ( defined( 'W2BC_ALLOW_SYNC' ) && W2BC_ALLOW_SYNC != true ) /** There may be plugins active that may cause fatal errors, as most plugins use deprecated stuff */
+	define( 'BB_LOAD_DEPRECATED', false );	/** Don't load deprecated stuff */
 
 /******************************************************************************
  ************************* Really Stop Editing Here!! *************************
@@ -208,6 +211,140 @@ function w2bc_insert_post( $args = null ) {
 }
 
 /**
+ * Retrieve a list of comments.
+ *
+ * The comment list can be for the blog as a whole or for an individual post.
+ *
+ * The list of comment arguments are 'status', 'orderby', 'comment_date_gmt',
+ * 'order', 'number', 'offset', and 'post_id'.
+ *
+ * @since 0.1-alpha3
+ * @global $wpdb
+ *
+ * @param mixed $args Optional. Array or string of options to override defaults.
+ * @return array List of comments.
+ */
+function w2bc_get_comments( $args = '' ) {
+	global $wpdb;
+
+	$defaults = array(
+		'author_email'	=> '',
+		'ID'		=> '',
+		'karma'		=> '',
+		'number'	=> '',
+		'offset'	=> '',
+		'orderby'	=> '',
+		'order'		=> 'ASC',
+		'parent'	=> '',
+		'post_ID'	=> '',
+		'post_id'	=> 0,
+		'status'	=> '',
+		'type'		=> '',
+		'user_id'	=> '',
+		'comment_date'	=> '',
+		'not_of_posts'	=> ''
+	);
+
+	$args = wp_parse_args( $args, $defaults );
+	extract( $args, EXTR_SKIP );
+
+	$post_id = absint($post_id);
+
+	if ( 'hold' == $status )
+		$approved = "comment_approved = '0'";
+	elseif ( 'approve' == $status )
+		$approved = "comment_approved = '1'";
+	elseif ( 'spam' == $status )
+		$approved = "comment_approved = 'spam'";
+	elseif ( 'trash' == $status )
+		$approved = "comment_approved = 'trash'";
+	else
+		$approved = "( comment_approved = '0' OR comment_approved = '1' )";
+
+	$order = ( 'ASC' == $order ) ? 'ASC' : 'DESC';
+
+	if ( ! empty( $orderby ) ) {
+		$ordersby = is_array($orderby) ? $orderby : preg_split('/[,\s]/', $orderby);
+		$ordersby = array_intersect(
+			$ordersby,
+			array(
+				'comment_agent',
+				'comment_approved',
+				'comment_author',
+				'comment_author_email',
+				'comment_author_IP',
+				'comment_author_url',
+				'comment_content',
+				'comment_date',
+				'comment_date_gmt',
+				'comment_ID',
+				'comment_karma',
+				'comment_parent',
+				'comment_post_ID',
+				'comment_type',
+				'user_id',
+			)
+		);
+		$orderby = empty( $ordersby ) ? 'comment_date_gmt' : implode( ', ', $ordersby );
+	} else {
+		$orderby = 'comment_date_gmt';
+	}
+
+	$number = absint( $number );
+	$offset = absint( $offset );
+
+	if ( !empty( $number ) )
+		if ( $offset )
+			$number = 'LIMIT ' . $offset . ',' . $number;
+		else
+			$number = 'LIMIT ' . $number;
+	else
+		$number = '';
+
+	$post_where = '';
+	
+	if ( $comment_date ) {
+		$post_where .= "YEAR(comment_date)>=" . substr( $comment_date, 0, 4 ) . " AND ";
+		if ( strlen( $comment_date ) > 5 )
+			$post_where .= "MONTH(comment_date)>=" . substr( $comment_date, 4, 2 ) . " AND ";
+		if ( strlen( $comment_date ) > 7 )
+			$post_where .= "DAYOFMONTH(comment_date)>=" . substr( $comment_date, 6, 2 ) . " AND ";
+		if ( strlen( $comment_date ) > 9 )
+			$post_where .= "HOUR(comment_date)>=" . substr( $comment_date, 8, 2 ) . " AND ";
+		if ( strlen( $comment_date ) > 11 )
+			$post_where .= "MINUTE(comment_date)>=" . substr( $comment_date, 10, 2 ) . " AND ";
+		if ( strlen( $comment_date ) > 13 )
+			$post_where .= "SECOND(comment_date)>=" . substr( $comment_date, 12, 2 ) . " AND ";
+	}
+	
+	if ( $not_of_posts )
+		$post_where .= 'comment_post_ID NOT IN(' . join( ',', $not_of_posts ) . ') AND ';
+
+	if ( ! empty($post_id) )
+		$post_where .= $wpdb->prepare( 'comment_post_ID = %d AND ', $post_id );
+	if ( '' !== $author_email )
+		$post_where .= $wpdb->prepare( 'comment_author_email = %s AND ', $author_email );
+	if ( '' !== $karma )
+		$post_where .= $wpdb->prepare( 'comment_karma = %d AND ', $karma );
+	if ( 'comment' == $type )
+		$post_where .= "comment_type = '' AND ";
+	elseif ( ! empty( $type ) )
+		$post_where .= $wpdb->prepare( 'comment_type = %s AND ', $type );
+	if ( '' !== $parent )
+		$post_where .= $wpdb->prepare( 'comment_parent = %d AND ', $parent );
+	if ( '' !== $user_id )
+		$post_where .= $wpdb->prepare( 'user_id = %d AND ', $user_id );
+	
+	$sql = "SELECT * FROM $wpdb->comments WHERE $post_where $approved ORDER BY $orderby $order $number";
+	//echo $sql . "<br /><hr>";
+	
+	$comments = $wpdb->get_results( $sql );
+	wp_cache_add( $cache_key, $comments, 'comment' );
+
+	return $comments;
+}
+
+/**
  * Changes = compare to >= for post time
  *
  * Only performs when W2BC_CONVERT_FROM_TIME is defined and it isn't set to false
@@ -234,7 +371,7 @@ $mode = $_GET['mode']; /** Get the page */
 <?php
 
 switch ( $mode ) { /** Load the page according to mode */
-	case 'main':
+	case 'topics':
 		$title = 'Converting Posts to Topics';
 		w2bc_after_title();
 		
@@ -248,7 +385,10 @@ switch ( $mode ) { /** Load the page according to mode */
 				echo "<li>Posts from date/time " . W2BC_CONVERT_FROM_TIME . " will only be converted.</li>\n";
 		}
 		
-		$posts = get_posts( $postargs );
+		if ( !$posts = get_posts( $postargs ) ) {
+			echo "<li><strong>No posts were found!</strong></li></ol>\n";
+			break;
+		}
 		//$bbtopics = new BB_Query( 'topic', array( 'post_status' => '0', 'per_page' => '-1', 'topic_status' => '0' ) );
 		//echo '<pre>'; print_r( $posts ); echo '</pre><hr>';
 		
@@ -258,7 +398,10 @@ switch ( $mode ) { /** Load the page according to mode */
 		if ( defined( 'W2BC_DEBUG' ) && W2BC_DEBUG == true && $all_mem_size = @ini_get( 'memory_limit' ) )
 			echo "<li>Allocated memory is $all_mem_size</li>\n";
 		
-		foreach ( $posts as $post ) {
+		if ( defined( 'W2BC_ALLOW_SYNC' ) && W2BC_ALLOW_SYNC == true )
+			$notposts = array();
+		
+		foreach ( (array) $posts as $post ) {
 			echo "<li>Processing post #$post->ID (<a href=\"$post->guid\">$post->post_title</a>)\n<ul>\n";
 			
 			if ( defined( 'W2BC_CONVERT_FROM_TIME' ) && W2BC_CONVERT_FROM_TIME !== false && defined( 'W2BC_DEBUG' ) && W2BC_DEBUG == true )
@@ -316,7 +459,7 @@ switch ( $mode ) { /** Load the page according to mode */
 				$position = 2;
 				
 				/* Add Comments as Posts */
-				foreach ( $comments as $comment ) {
+				foreach ( (array) $comments as $comment ) {
 					//echo '<pre>'; print_r( $comment ); echo '</pre><hr>';
 					
 					/* We don't need blank comments */
@@ -355,6 +498,9 @@ switch ( $mode ) { /** Load the page according to mode */
 							echo "<li>Reply's position is $position</li>\n";
 						echo "</li>\n";
 						$position++;
+						
+						if ( defined( 'W2BC_ALLOW_SYNC' ) && W2BC_ALLOW_SYNC == true && is_array( $notposts ) )
+							$notposts[] = $post->ID;
 					} else {
 						echo "<li>There was a problem adding another reply</li>\n";
 					}
@@ -372,6 +518,115 @@ switch ( $mode ) { /** Load the page according to mode */
 			echo "</ul>\n</li>\n";
 			
 		}
+		
+		if ( defined( 'W2BC_ALLOW_SYNC' ) && W2BC_ALLOW_SYNC == true )
+			echo "<li>The post date for last post was $post->post_date (" . (string) abs( intval( str_replace( array( '-', ':', ' ' ), '', $post->post_date ) ) ) . ").</li>";
+		
+		echo "</ol>\n\n";
+		
+		if ( defined( 'W2BC_ALLOW_SYNC' ) && W2BC_ALLOW_SYNC == true && is_array( $notposts ) ) {
+			$notposts = join( ',', $notposts );
+			echo "<p><strong>Proceed to <a href=\"w2bc.php?mode=replies&notposts=$notposts\">convert comments to replies</a>.</strong></p>";
+		}
+		break;
+	
+	case 'replies':
+		if ( !defined( 'W2BC_ALLOW_SYNC' ) || W2BC_ALLOW_SYNC != true )
+			die( 'Syncing is not enabled, and comments are converted while converting posts. If you want to sync, then set W2BC_ALLOW_SYNC to true in the script.' );
+		
+		$title = 'Converting Comments to Replies';
+		w2bc_after_title();
+		
+		echo "<ol>\n";
+		
+		$commentargs = array( 'status' => 'approve', 'order' => 'ASC' );
+		if ( defined( 'W2BC_CONVERT_FROM_TIME' ) && W2BC_CONVERT_FROM_TIME !== false ) {
+			$commentargs['comment_date'] = W2BC_CONVERT_FROM_TIME;
+			if ( defined( 'W2BC_DEBUG' ) && W2BC_DEBUG == true )
+				echo "<li>Comments from date/time " . W2BC_CONVERT_FROM_TIME . " will only be converted.</li>\n";
+		}
+		
+		if ( isset( $_GET['notposts'] ) && $_GET['notposts'] != null ) {
+			$commentargs['not_of_posts'] = array_filter( array_map( 'intval', explode( ',', stripslashes( $_GET['notposts'] ) ) ) );
+			if ( defined( 'W2BC_DEBUG' ) && W2BC_DEBUG == true )
+				echo "<li>Comments from post IDs " . join( ', ', $commentargs['not_of_posts'] ) . " will not be converted.</li>\n";
+		}
+		
+		if ( !$comments = w2bc_get_comments( $commentargs ) ) {
+			echo "<li><strong>No comments were found (which match the criteria)</strong></li></ol>\n";
+			break;
+		}
+		//echo '<pre>'; print_r( $comments ); echo '</pre><hr>';
+		
+		if ( defined( 'W2BC_DEBUG' ) && W2BC_DEBUG == true )
+			echo "<li>Total number of comments - " . count( $comments ) . "</li>\n";
+		
+		if ( defined( 'W2BC_DEBUG' ) && W2BC_DEBUG == true && $all_mem_size = @ini_get( 'memory_limit' ) )
+			echo "<li>Allocated memory is $all_mem_size</li>\n";
+		
+		/* Add Comments as Posts */
+		foreach ( (array) $comments as $comment ) {
+			//echo '<pre>'; print_r( $comment ); echo '</pre><hr>';
+			
+			/* We don't need blank comments */
+			if ( !$comment->comment_content = stripslashes( $comment->comment_content ) )
+				continue;
+			
+			if ( !$post = get_post( $comment->comment_post_ID ) )
+				continue;
+			//echo '<pre>'; print_r( $post ); echo '</pre><hr>';
+			
+			$slug = bb_slug_sanitize( wp_specialchars_decode( $post->post_title, ENT_QUOTES ) );
+			if ( !$topic = get_topic( $slug ) )
+				continue;
+			//echo $slug . '<br /><pre>'; print_r( $topic ); echo '</pre><hr>';
+			
+			echo "<li>Processing comment #$comment->comment_ID of post #$post->ID ($post->post_title) which will go into topic #$topic->topic_id\n<ul>\n";
+			
+			if ( defined( 'W2BC_CONVERT_FROM_TIME' ) && W2BC_CONVERT_FROM_TIME !== false && defined( 'W2BC_DEBUG' ) && W2BC_DEBUG == true )
+				echo "<li>Comment date/time is $comment->comment_date (GMT - $comment->comment_date_gmt)</li>\n";
+			
+			/* Comments shouldn't be posted before original post */
+			if ( strtotime( $comment->comment_date_gmt ) < strtotime( $post->post_date_gmt ) )
+				$comment->comment_date_gmt = gmdate( 'Y-m-d H:i:s', strtotime( $post->post_date_gmt ) +  10 );
+			
+			$position = $topic->topic_posts ? $topic->topic_posts + 1 : 2;
+			
+			if ( $comment->comment_type == 'pingback' && defined( 'W2BC_CONVERT_PINGBACKS' ) && W2BC_CONVERT_PINGBACKS == true )
+				$post_data = array( 'post_text' => $comment->comment_content, 'topic_id' => $topic->topic_id, 'post_time' => $comment->comment_date_gmt, 'poster_ip' => $comment->comment_author_IP, 'post_position' => $position, 'poster_id' => false );
+			elseif ( $comment->comment_type == 'pingback' && ( !defined( 'W2BC_CONVERT_PINGBACKS' ) || W2BC_CONVERT_PINGBACKS != true ) )
+				continue;
+			elseif ( $comment->user_id )
+				$post_data = array( 'post_text' => $comment->comment_content, 'topic_id' => $topic->topic_id, 'poster_id' => $comment->user_id, 'post_time' => $comment->comment_date_gmt, 'poster_ip' => $comment->comment_author_IP, 'post_position' => $position );
+			else
+				if ( $user = get_user_by_email( $comment->comment_author_email ) )
+					$post_data = array( 'post_text' => $comment->comment_content, 'topic_id' => $topic->topic_id, 'poster_id' => $user->ID, 'post_time' => $comment->comment_date_gmt, 'poster_ip' => $comment->comment_author_IP, 'post_position' => $position );
+				else
+					$post_data = array( 'post_text' => $comment->comment_content, 'topic_id' => $topic->topic_id, 'poster_id' => false, 'post_time' => $comment->comment_date_gmt, 'post_author' => $comment->comment_author, 'post_email' => $comment->comment_author_email, 'post_url' => $comment->comment_author_url, 'poster_ip' => $comment->comment_author_IP, 'post_position' => $position );
+			
+			//echo '<pre>'; print_r( $post_data ); echo '</pre><hr>';
+			
+			if ( $new_post_id = w2bc_insert_post( $post_data ) ) {
+				echo "<li>Added another reply - #$new_post_id\n";
+				
+				if ( $comment->comment_type == 'pingback' && defined( 'W2BC_CONVERT_PINGBACKS' ) && W2BC_CONVERT_PINGBACKS == true ) {
+					bb_update_postmeta( $new_post_id, 'pingback_uri', $comment->comment_author_url );
+					bb_update_postmeta( $new_post_id, 'pingback_title', $comment->comment_author );
+					if ( defined( 'W2BC_DEBUG' ) && W2BC_DEBUG == true )
+						echo "<li>This post is a pingback</li>\n";
+				}
+				
+				if ( defined( 'W2BC_DEBUG' ) && W2BC_DEBUG == true )
+					echo "<li>Reply's position is $position</li>\n";
+				echo "</li>\n";
+				$position++;
+			} else {
+				echo "<li>There was a problem adding another reply</li>\n";
+			}
+			
+			echo "</ul>\n</li>\n";
+			
+		}
 		echo "</ol>\n\n";
 		
 		break;
@@ -382,19 +637,31 @@ switch ( $mode ) { /** Load the page according to mode */
 		w2bc_after_title();
 		
 		echo '<ul>';
-			echo '<li>Before Converting:<ul>';
-				echo '<li>Make sure that you\'ve created a <a href="http://codex.wordpress.org/WordPress_Backups" title="Creating Backups">backup</a> of your database and files just in case something went wrong.</li>';
-				echo '<li>Your forum atleast has a single forum and a topic (you may delete that later).</li>';
-				echo '<li>Deactivate each and every plugin and switch to the default theme (on WordPress and bbPress both). You may just let bbPress Integration WordPress plugin remain activated if that\'s installed. You might also want to install <a href="http://bbpress.org/plugins/topic/admin-can-post-anything/">Admin Can Post Anything plugin</a> and <a href="http://bbpress.org/plugins/topic/allow-images/">Allow Images</a> as bbPress only allows some HTML to be posted.</li>';
-				echo '<li>This converter is heavy and consumes too much CPU, so it is suggested that you do the process on your local machine.</li>';
-			echo '</ul></li>';
+			if ( defined( 'W2BC_ALLOW_SYNC' ) && W2BC_ALLOW_SYNC == true ) {
+				echo '<li>Before Syncing:<ul>';
+					echo '<li>Make sure that you\'ve created a <a href="http://codex.wordpress.org/WordPress_Backups" title="Creating Backups">backup</a> of your database and files just in case something went wrong.</li>';
+					echo '<li>A recount (by going to admin section -> tools, check all options and press recount button) is <em>highly</em> recommended.</li>';
+					echo '<li>You may leave the plugins active but you must note that they may <em>still</em> interfere in the process.</li>';
+					echo '<li>This converter is heavy and consumes too much CPU, so it is suggested that you do the process on your local machine (if you are not in a hurry).</li>';
+				echo '</ul></li>';
+			} else {
+				echo '<li>Before Converting:<ul>';
+					echo '<li>Make sure that you\'ve created a <a href="http://codex.wordpress.org/WordPress_Backups" title="Creating Backups">backup</a> of your database and files just in case something went wrong.</li>';
+					echo '<li>Your forum atleast has a single forum and a topic (you may delete that later).</li>';
+					echo '<li>Deactivate each and every plugin and switch to the default theme (on WordPress and bbPress both). You may just let bbPress Integration WordPress plugin remain activated if that\'s installed. You might also want to install <a href="http://bbpress.org/plugins/topic/admin-can-post-anything/">Admin Can Post Anything plugin</a> and <a href="http://bbpress.org/plugins/topic/allow-images/">Allow Images</a> as bbPress only allows some HTML to be posted.</li>';
+					echo '<li>This converter is heavy and consumes too much CPU, so it is suggested that you do the process on your local machine.</li>';
+				echo '</ul></li>';
+			}
 			
 			echo '<li>After Converting:<ul>';
 				echo '<li>Do a recount (by going to admin section -> tools, check all options and press recount button) to get the posts/topics/etc counts in sync.</li>';
-				echo '<li>Delete this script if not needed.</li>';
+				echo '<li>Delete this script if not needed or set W2BC_DISABLE_SCRIPT constant to true in the script.</li>';
 			echo '</ul></li>';
 			
-			echo '<li>If every thing is OK, proceed to <a href="w2bc.php?mode=main">converting</a>!</li>';
+			echo '<li>If every thing is OK, proceed to <a href="w2bc.php?mode=topics">converting posts to topics</a> (their categories to forums, tags, and comments to replies)!';
+				if ( defined( 'W2BC_ALLOW_SYNC' ) && W2BC_ALLOW_SYNC == true )
+					echo ' Or you may straight away go to <a href="w2bc.php?mode=replies">syncing comments to replies</a>.';
+				echo '</li>';
 			
 		echo '</ul>';
 		
@@ -413,7 +680,7 @@ switch ( $mode ) { /** Load the page according to mode */
 				abs( intval( @ini_get( 'memory_limit' ) ) )
 				);
 				?>
-				Page Generated by WP to bb Converter (W2bC) made by <a href="http://gaut.am/">Gautam Gupta</a> (<a href="http://twitter.com/_GautamGupta_">twitter</a>) - ver. <?php echo W2BC_VER; ?>.
+				WP to bb Converter (W2bC) made by <a href="http://gaut.am/">Gautam</a> (<a href="http://twitter.com/_GautamGupta_">twitter</a>) - ver. <?php echo W2BC_VER; ?>.
 			</p>
 		</div>
 
